@@ -1,12 +1,55 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import './Modal.css'
+
+const API_URL = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api'
+const API_KEY = 'flx_sk_a1b2c3d4e5f6g7h8i9j0'
+
+const authFetch = (url, options = {}) => {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'x-api-key': API_KEY,
+      'Content-Type': 'application/json'
+    }
+  })
+}
 
 function CreateRoomModal({ movies, onClose, onCreate }) {
   const [step, setStep] = useState(1)
   const [selectedMovie, setSelectedMovie] = useState(null)
-  const [customMovie, setCustomMovie] = useState({ title: '', year: '', genre: '' })
   const [hostName, setHostName] = useState('')
-  const [useCustomMovie, setUseCustomMovie] = useState(false)
+  
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [showSearch, setShowSearch] = useState(false)
+
+  // Debounced search
+  useEffect(() => {
+    if (searchQuery.length < 2) {
+      setSearchResults([])
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true)
+      try {
+        const response = await authFetch(`${API_URL}/movies/search?query=${encodeURIComponent(searchQuery)}`)
+        if (response.ok) {
+          const data = await response.json()
+          setSearchResults(data.movies || [])
+        }
+      } catch (error) {
+        console.error('Search error:', error)
+      } finally {
+        setIsSearching(false)
+      }
+    }, 400)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -16,39 +59,28 @@ function CreateRoomModal({ movies, onClose, onCreate }) {
       return
     }
 
-    if (useCustomMovie) {
-      if (!customMovie.title.trim()) {
-        alert('Please enter a movie title')
-        return
-      }
-      onCreate({
-        movieTitle: customMovie.title,
-        movieYear: customMovie.year || new Date().getFullYear(),
-        movieGenre: customMovie.genre || 'Unknown',
-        hostName: hostName.trim()
-      })
-    } else {
-      if (!selectedMovie) {
-        alert('Please select a movie')
-        return
-      }
-      onCreate({
-        movieId: selectedMovie.id,
-        hostName: hostName.trim()
-      })
+    if (!selectedMovie) {
+      alert('Please select a movie')
+      return
     }
+
+    onCreate({
+      movieId: selectedMovie.id,
+      movieTitle: selectedMovie.title,
+      movieYear: selectedMovie.year,
+      moviePoster: selectedMovie.poster,
+      movieGenre: selectedMovie.genre,
+      movieOverview: selectedMovie.overview,
+      hostName: hostName.trim()
+    })
   }
 
   const handleMovieSelect = (movie) => {
     setSelectedMovie(movie)
-    setUseCustomMovie(false)
     setStep(2)
-  }
-
-  const handleCustomMovieSelect = () => {
-    setSelectedMovie(null)
-    setUseCustomMovie(true)
-    setStep(2)
+    setShowSearch(false)
+    setSearchQuery('')
+    setSearchResults([])
   }
 
   return (
@@ -81,7 +113,71 @@ function CreateRoomModal({ movies, onClose, onCreate }) {
         {step === 1 && (
           <div className="modal-content">
             <div className="movie-selection">
-              <h3>Select a Movie</h3>
+              {/* Search Section */}
+              <div className="search-section">
+                <h3>🔍 Search Movies</h3>
+                <div className="search-input-container">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value)
+                      setShowSearch(true)
+                    }}
+                    placeholder="Search for any movie..."
+                    className="search-input"
+                    autoFocus
+                  />
+                  {isSearching && <div className="search-spinner"></div>}
+                </div>
+                
+                {/* Search Results */}
+                {showSearch && searchResults.length > 0 && (
+                  <div className="search-results">
+                    {searchResults.map(movie => (
+                      <div 
+                        key={movie.id}
+                        className="search-result-item"
+                        onClick={() => handleMovieSelect(movie)}
+                      >
+                        <div className="search-result-poster">
+                          {movie.poster ? (
+                            <img src={movie.poster} alt={movie.title} />
+                          ) : (
+                            <div className="poster-placeholder-small">🎬</div>
+                          )}
+                        </div>
+                        <div className="search-result-info">
+                          <span className="search-result-title">{movie.title}</span>
+                          <span className="search-result-year">{movie.year}</span>
+                          {movie.overview && (
+                            <p className="search-result-overview">
+                              {movie.overview.length > 100 
+                                ? movie.overview.substring(0, 100) + '...' 
+                                : movie.overview}
+                            </p>
+                          )}
+                        </div>
+                        {movie.rating > 0 && (
+                          <div className="search-result-rating">
+                            ⭐ {movie.rating.toFixed(1)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {showSearch && searchQuery.length >= 2 && searchResults.length === 0 && !isSearching && (
+                  <div className="no-results">No movies found for "{searchQuery}"</div>
+                )}
+              </div>
+
+              <div className="custom-movie-divider">
+                <span>or choose from popular</span>
+              </div>
+
+              {/* Popular Movies Grid */}
               <div className="movie-grid">
                 {movies.map(movie => (
                   <div 
@@ -101,70 +197,13 @@ function CreateRoomModal({ movies, onClose, onCreate }) {
                   </div>
                 ))}
               </div>
-
-              <div className="custom-movie-divider">
-                <span>or</span>
-              </div>
-
-              <button 
-                type="button" 
-                className="custom-movie-btn"
-                onClick={handleCustomMovieSelect}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="12" y1="5" x2="12" y2="19"></line>
-                  <line x1="5" y1="12" x2="19" y2="12"></line>
-                </svg>
-                Add Custom Movie
-              </button>
             </div>
           </div>
         )}
 
         {step === 2 && (
           <form className="modal-content" onSubmit={handleSubmit}>
-            {useCustomMovie && (
-              <div className="custom-movie-form">
-                <h3>Movie Details</h3>
-                <div className="form-group">
-                  <label htmlFor="movieTitle">Movie Title *</label>
-                  <input
-                    type="text"
-                    id="movieTitle"
-                    value={customMovie.title}
-                    onChange={e => setCustomMovie({ ...customMovie, title: e.target.value })}
-                    placeholder="Enter movie title"
-                    autoFocus
-                  />
-                </div>
-                <div className="form-row">
-                  <div className="form-group">
-                    <label htmlFor="movieYear">Year</label>
-                    <input
-                      type="number"
-                      id="movieYear"
-                      value={customMovie.year}
-                      onChange={e => setCustomMovie({ ...customMovie, year: e.target.value })}
-                      placeholder="2024"
-                      min="1900"
-                      max="2030"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="movieGenre">Genre</label>
-                    <input
-                      type="text"
-                      id="movieGenre"
-                      value={customMovie.genre}
-                      onChange={e => setCustomMovie({ ...customMovie, genre: e.target.value })}
-                      placeholder="Drama, Action..."
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!useCustomMovie && selectedMovie && (
+            {selectedMovie && (
               <div className="selected-movie-preview">
                 <div className="preview-poster">
                   {selectedMovie.poster ? (
@@ -175,7 +214,14 @@ function CreateRoomModal({ movies, onClose, onCreate }) {
                 </div>
                 <div className="preview-info">
                   <h3>{selectedMovie.title}</h3>
-                  <p>{selectedMovie.year} • {selectedMovie.genre}</p>
+                  <p>{selectedMovie.year} {selectedMovie.genre && `• ${selectedMovie.genre}`}</p>
+                  {selectedMovie.overview && (
+                    <p className="movie-overview">
+                      {selectedMovie.overview.length > 150 
+                        ? selectedMovie.overview.substring(0, 150) + '...' 
+                        : selectedMovie.overview}
+                    </p>
+                  )}
                 </div>
                 <button 
                   type="button" 
@@ -198,7 +244,7 @@ function CreateRoomModal({ movies, onClose, onCreate }) {
                   onChange={e => setHostName(e.target.value)}
                   placeholder="Enter your display name"
                   maxLength={30}
-                  autoFocus={!useCustomMovie}
+                  autoFocus
                 />
               </div>
             </div>
@@ -219,4 +265,3 @@ function CreateRoomModal({ movies, onClose, onCreate }) {
 }
 
 export default CreateRoomModal
-

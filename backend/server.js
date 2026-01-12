@@ -4,6 +4,11 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
+// TMDB API Configuration
+const TMDB_API_KEY = process.env.TMDB_API_KEY || '104733250bbaad9c341eabb34c007b64';
+const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500';
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -15,6 +20,38 @@ const io = new Server(server, {
 
 app.use(cors());
 app.use(express.json());
+
+// API Key for authentication
+const API_KEY = process.env.API_KEY || 'flx_sk_a1b2c3d4e5f6g7h8i9j0';
+
+// Health check endpoint (no auth required)
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'flixpert-api', timestamp: new Date().toISOString() });
+});
+
+// API Key authentication middleware
+const authenticateApiKey = (req, res, next) => {
+  // Accept API key from header OR query parameter
+  const apiKey = req.headers['x-api-key'] || req.query.api_key;
+  
+  if (!apiKey) {
+    return res.status(401).json({ error: 'API key required. Include x-api-key header or api_key query parameter.' });
+  }
+  
+  if (apiKey !== API_KEY) {
+    return res.status(403).json({ error: 'Invalid API key' });
+  }
+  
+  next();
+};
+
+// Apply authentication to all /api routes except /api/health
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health') {
+    return next();
+  }
+  authenticateApiKey(req, res, next);
+});
 
 // In-memory storage
 const rooms = new Map();
@@ -125,28 +162,31 @@ app.get('/api/rooms/:roomId', (req, res) => {
 
 // POST /api/rooms - Create a new room
 app.post('/api/rooms', (req, res) => {
-  const { movieId, movieTitle, movieYear, moviePoster, movieGenre, hostName } = req.body;
+  const { movieId, movieTitle, movieYear, moviePoster, movieGenre, movieOverview, hostName } = req.body;
   
   if (!hostName) {
     return res.status(400).json({ error: 'Host name is required' });
   }
   
   let movie;
-  if (movieId) {
+  if (movieId && typeof movieId === 'number' && movieId < 100) {
+    // Check sample movies for small IDs (legacy support)
     movie = sampleMovies.find(m => m.id === movieId);
     if (!movie) {
       return res.status(400).json({ error: 'Invalid movie ID' });
     }
   } else if (movieTitle) {
+    // TMDB movie or custom movie
     movie = {
-      id: Date.now(),
+      id: movieId || Date.now(),
       title: movieTitle,
       year: movieYear || new Date().getFullYear(),
       poster: moviePoster || null,
-      genre: movieGenre || 'Unknown'
+      genre: movieGenre || 'Unknown',
+      overview: movieOverview || null
     };
   } else {
-    return res.status(400).json({ error: 'Movie ID or movie title is required' });
+    return res.status(400).json({ error: 'Movie title is required' });
   }
   
   const roomId = uuidv4();
@@ -243,9 +283,113 @@ app.post('/api/rooms/:roomId/join', (req, res) => {
   });
 });
 
-// GET /api/movies - Get available movies for room creation
+// GET /api/movies - Get available movies for room creation (fallback to sample movies)
 app.get('/api/movies', (req, res) => {
   res.json({ movies: sampleMovies });
+});
+
+// GET /api/movies/search - Search movies from TMDB
+app.get('/api/movies/search', async (req, res) => {
+  const { query } = req.query;
+  
+  if (!query || query.trim().length < 2) {
+    return res.status(400).json({ error: 'Search query must be at least 2 characters' });
+  }
+  
+  try {
+    const response = await fetch(
+      `${TMDB_BASE_URL}/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}&include_adult=false&language=en-US&page=1`
+    );
+    
+    if (!response.ok) {
+      throw new Error('TMDB API error');
+    }
+    
+    const data = await response.json();
+    
+    // Transform TMDB results to our format
+    const movies = data.results.slice(0, 10).map(movie => ({
+      id: movie.id,
+      title: movie.title,
+      year: movie.release_date ? new Date(movie.release_date).getFullYear() : null,
+      poster: movie.poster_path ? `${TMDB_IMAGE_BASE}${movie.poster_path}` : null,
+      overview: movie.overview,
+      rating: movie.vote_average,
+      genre: 'Movie' // TMDB returns genre_ids, we'd need another call to get names
+    }));
+    
+    res.json({ movies, total: data.total_results });
+  } catch (error) {
+    console.error('TMDB search error:', error);
+    res.status(500).json({ error: 'Failed to search movies' });
+  }
+});
+
+// GET /api/movies/:movieId - Get movie details from TMDB
+app.get('/api/movies/:movieId', async (req, res) => {
+  const { movieId } = req.params;
+  
+  try {
+    const response = await fetch(
+      `${TMDB_BASE_URL}/movie/${movieId}?api_key=${TMDB_API_KEY}&language=en-US`
+    );
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: 'Movie not found' });
+      }
+      throw new Error('TMDB API error');
+    }
+    
+    const movie = await response.json();
+    
+    res.json({
+      id: movie.id,
+      title: movie.title,
+      year: movie.release_date ? new Date(movie.release_date).getFullYear() : null,
+      poster: movie.poster_path ? `${TMDB_IMAGE_BASE}${movie.poster_path}` : null,
+      backdrop: movie.backdrop_path ? `${TMDB_IMAGE_BASE}${movie.backdrop_path}` : null,
+      overview: movie.overview,
+      rating: movie.vote_average,
+      runtime: movie.runtime,
+      genre: movie.genres?.map(g => g.name).join(', ') || 'Unknown',
+      tagline: movie.tagline
+    });
+  } catch (error) {
+    console.error('TMDB movie details error:', error);
+    res.status(500).json({ error: 'Failed to get movie details' });
+  }
+});
+
+// GET /api/movies/popular - Get popular movies from TMDB
+app.get('/api/movies/popular', async (req, res) => {
+  try {
+    const response = await fetch(
+      `${TMDB_BASE_URL}/movie/popular?api_key=${TMDB_API_KEY}&language=en-US&page=1`
+    );
+    
+    if (!response.ok) {
+      throw new Error('TMDB API error');
+    }
+    
+    const data = await response.json();
+    
+    const movies = data.results.slice(0, 12).map(movie => ({
+      id: movie.id,
+      title: movie.title,
+      year: movie.release_date ? new Date(movie.release_date).getFullYear() : null,
+      poster: movie.poster_path ? `${TMDB_IMAGE_BASE}${movie.poster_path}` : null,
+      overview: movie.overview,
+      rating: movie.vote_average,
+      genre: 'Movie'
+    }));
+    
+    res.json({ movies });
+  } catch (error) {
+    console.error('TMDB popular movies error:', error);
+    // Fallback to sample movies if TMDB fails
+    res.json({ movies: sampleMovies });
+  }
 });
 
 // ============== SOCKET.IO FOR REAL-TIME CHAT ==============

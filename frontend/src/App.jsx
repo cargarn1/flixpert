@@ -10,6 +10,19 @@ import './App.css'
 
 const SOCKET_URL = import.meta.env.PROD ? '' : 'http://localhost:3001'
 const API_URL = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api'
+const API_KEY = 'flx_sk_a1b2c3d4e5f6g7h8i9j0'
+
+// Helper for authenticated fetch
+const authFetch = (url, options = {}) => {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      'x-api-key': API_KEY,
+      'Content-Type': 'application/json'
+    }
+  })
+}
 
 function App() {
   const [socket, setSocket] = useState(null)
@@ -57,9 +70,9 @@ function App() {
     const fetchData = async () => {
       try {
         const [roomsRes, statsRes, moviesRes] = await Promise.all([
-          fetch(`${API_URL}/rooms`),
-          fetch(`${API_URL}/stats`),
-          fetch(`${API_URL}/movies`)
+          authFetch(`${API_URL}/rooms`),
+          authFetch(`${API_URL}/stats`),
+          authFetch(`${API_URL}/movies`)
         ])
 
         const roomsData = await roomsRes.json()
@@ -81,9 +94,8 @@ function App() {
 
   const handleCreateRoom = async (roomData) => {
     try {
-      const response = await fetch(`${API_URL}/rooms`, {
+      const response = await authFetch(`${API_URL}/rooms`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(roomData)
       })
 
@@ -93,7 +105,7 @@ function App() {
       setCurrentUser({ id: data.userId, name: roomData.hostName })
       
       // Fetch full room details
-      const roomResponse = await fetch(`${API_URL}/rooms/${data.roomId}`)
+      const roomResponse = await authFetch(`${API_URL}/rooms/${data.roomId}`)
       const roomDetails = await roomResponse.json()
       
       setCurrentRoom(roomDetails)
@@ -113,9 +125,8 @@ function App() {
     if (!selectedRoomToJoin) return
 
     try {
-      const response = await fetch(`${API_URL}/rooms/${selectedRoomToJoin.id}/join`, {
+      const response = await authFetch(`${API_URL}/rooms/${selectedRoomToJoin.id}/join`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userName })
       })
 
@@ -125,7 +136,7 @@ function App() {
       setCurrentUser({ id: data.userId, name: userName })
       
       // Fetch full room details
-      const roomResponse = await fetch(`${API_URL}/rooms/${selectedRoomToJoin.id}`)
+      const roomResponse = await authFetch(`${API_URL}/rooms/${selectedRoomToJoin.id}`)
       const roomDetails = await roomResponse.json()
       
       setCurrentRoom(roomDetails)
